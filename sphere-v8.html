@@ -182,41 +182,40 @@ function projectStar(yaw, pitch){
   return {sx:W/2+x1*scale, sy:H/2-y2*scale};
 }
 
-// Circuit dust clusters – dense, grain-like
-const circuitClusters = (()=>{
-  const clusters=[]; 
+// Circuit dust cloud – true 3D, projected with camera
+const dustCloud = (()=>{
+  const grains=[];
   const rng=(s)=>{let x=s;return()=>{x=Math.sin(x*127.1+311.7)*43758.5453;return x-Math.floor(x);}};
-  const r=rng(99);
-  const sw=typeof screen!=='undefined'?screen.width:1440;
-  const sh=typeof screen!=='undefined'?screen.height:900;
-  const numClusters=160; // many more clusters
-  for(let i=0;i<numClusters;i++){
-    const cx=r()*sw*1.2; // spread beyond screen edges too
-    const cy=r()*sh*1.2;
-    // Vary cluster types: tight/dense vs loose/sparse
+  const r=rng(77);
+  // 3000 grains scattered in a sphere of radius ~4 around origin
+  // Clustered: generate cluster centers first, then grains around them
+  const numClusters=120;
+  for(let ci=0;ci<numClusters;ci++){
+    // Cluster center in 3D space
+    const th=r()*Math.PI*2, ph=Math.acos(2*r()-1);
+    const rad=0.3+r()*3.8; // spread from close to far
+    const cx3=rad*Math.sin(ph)*Math.cos(th);
+    const cy3=rad*Math.sin(ph)*Math.sin(th);
+    const cz3=rad*Math.cos(ph);
     const type=r()>0.45?'dense':r()>0.2?'medium':'wisp';
-    const density=type==='dense'?70+Math.floor(r()*90):type==='medium'?30+Math.floor(r()*40):12+Math.floor(r()*20);
-    const spread=type==='dense'?8+r()*22:type==='medium'?18+r()*40:30+r()*70;
-    const grains=[];
-    for(let g=0;g<density;g++){
-      const angle=r()*Math.PI*2;
-      // Power falloff: most grains near center
-      const dist=Math.pow(r(),1.8)*spread;
-      const ox=Math.cos(angle)*dist;
-      const oy=Math.sin(angle)*dist;
-      const bright=type==='dense'?Math.round(55+r()*90):Math.round(80+r()*140);
+    const count=type==='dense'?35+Math.floor(r()*50):type==='medium'?14+Math.floor(r()*20):5+Math.floor(r()*10);
+    const spread=type==='dense'?0.06+r()*0.14:type==='medium'?0.12+r()*0.25:0.2+r()*0.5;
+    for(let gi=0;gi<count;gi++){
+      const ga=r()*Math.PI*2, gp=Math.acos(2*r()-1);
+      const gd=Math.pow(r(),1.6)*spread; // power falloff
       grains.push({
-        ox, oy,
-        r: r()*0.85+0.12, // fine grains
-        alpha: type==='dense'?0.12+r()*0.45:0.06+r()*0.28,
-        bright,
+        x: cx3+gd*Math.sin(gp)*Math.cos(ga),
+        y: cy3+gd*Math.sin(gp)*Math.sin(ga),
+        z: cz3+gd*Math.cos(gp),
+        size: r()*0.9+0.15,
+        bright: type==='dense'?Math.round(50+r()*80):Math.round(75+r()*130),
+        alpha: type==='dense'?0.15+r()*0.55:0.07+r()*0.32,
         phase: r()*Math.PI*2,
-        spd: 0.2+r()*0.6,
+        spd: 0.15+r()*0.5,
       });
     }
-    clusters.push({cx,cy,grains});
   }
-  return clusters;
+  return grains;
 })();
 
 // Circuit dots – pre-generated grid with randomization
@@ -758,20 +757,20 @@ function frame(){
     });
   } else if(bgMode==='circuit'){
     // Circuit dot field
-    // Dust grain clusters – drawn each frame from pre-generated clusters
-    circuitClusters.forEach(cl=>{
-      cl.grains.forEach(g=>{
-        const x=((cl.cx+g.ox)%W+W)%W, y=((cl.cy+g.oy)%H+H)%H;
-        const a=g.alpha*(0.6+0.4*Math.sin(glowT*g.spd+g.phase));
-        ctx.fillStyle=`rgba(${g.bright},${g.bright},${g.bright},${a.toFixed(3)})`;
-        ctx.fillRect(x-g.r,y-g.r,g.r*2,g.r*2);
-      });
+    // 3D dust cloud – project each grain with orbit camera
+    dustCloud.forEach(g=>{
+      const p=project(g.x, g.y, g.z);
+      if(p.d<=0||p.sx<-40||p.sx>W+40||p.sy<-40||p.sy>H+40)return;
+      // Depth-based: closer = bigger & brighter, far = tiny & dim
+      const depthScale=Math.min(1.8, p.d*1.2);
+      const r2=g.size*depthScale*0.6;
+      if(r2<0.1)return;
+      const tw=0.6+0.4*Math.sin(glowT*g.spd+g.phase);
+      const a=g.alpha*tw*Math.min(1, depthScale*0.7);
+      ctx.fillStyle=`rgba(${g.bright},${g.bright},${g.bright},${a.toFixed(3)})`;
+      ctx.fillRect(p.sx-r2, p.sy-r2, r2*2, r2*2);
     });
-    // Dots suppressed – grain clusters only
-    // Very faint grid
-    ctx.strokeStyle='rgba(55,55,53,0.12)';ctx.lineWidth=0.3;
-    for(let gx=0;gx<W;gx+=28){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,H);ctx.stroke();}
-    for(let gy=0;gy<H;gy+=26){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}
+    // No grid – pure dust
   } else {
     // Beige: simple ellipses, rotating with camera, no fill, no bugs
     const cx2=W/2, cy2=H/2;
@@ -788,10 +787,23 @@ function frame(){
       const pitch = orbitPitch * 0.5 + e.pitchMod;
       const rx = bR * e.rx;
       const ry = Math.max(5, rx * Math.abs(Math.cos(pitch)));
+      const cpitch = Math.abs(Math.cos(pitch));
+      const off = 10;
+      // Outer thin flank
+      ctx.beginPath();
+      ctx.ellipse(cx2, cy2, rx+off, Math.max(4, ry+off*cpitch), angle, 0, Math.PI*2);
+      ctx.strokeStyle=`rgba(45,38,28,${(e.alpha*0.42).toFixed(3)})`;
+      ctx.lineWidth=0.55; ctx.stroke();
+      // Center main line
       ctx.beginPath();
       ctx.ellipse(cx2, cy2, rx, ry, angle, 0, Math.PI*2);
       ctx.strokeStyle=`rgba(45,38,28,${e.alpha})`;
       ctx.lineWidth=e.lw; ctx.stroke();
+      // Inner thin flank
+      ctx.beginPath();
+      ctx.ellipse(cx2, cy2, Math.max(5, rx-off), Math.max(4, ry-off*cpitch), angle, 0, Math.PI*2);
+      ctx.strokeStyle=`rgba(45,38,28,${(e.alpha*0.42).toFixed(3)})`;
+      ctx.lineWidth=0.55; ctx.stroke();
     });
   }
 
